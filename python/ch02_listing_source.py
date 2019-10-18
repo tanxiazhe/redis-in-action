@@ -67,6 +67,28 @@ def clean_sessions(conn):
 #E Remove the oldest tokens
 #END
 
+def clean_sessions_by_list(conn):
+    while not QUIT:
+        size = conn.llen('recent:')
+        if size < + LIMIT:
+            time.sleep(1)
+            continue
+        end_index = min(size - LIMIT, 100)
+        conn.ltrim('recent:', 0, end_index - 1)
+        conn.ltrim('viewed:', 0, end_index - 1)
+
+        tokens = conn.lrange('recent:', 0, -1)
+        conn.hdel('login:', *tokens)
+
+
+def update_token_by_list(conn, token, user, item=None):
+    conn.hset('login:', token, user)
+    conn.lpush('recent:', token)
+    if item:
+        conn.lpush('viewed:', token)
+        conn.ltrim('viewed:', 0, -26)
+
+
 # <start id="_1311_14471_8279"/>
 def add_to_cart(conn, session, item, count):
     if count <= 0:
@@ -234,7 +256,7 @@ class Inventory(object):
 class TestCh02(unittest.TestCase):
     def setUp(self):
         import redis
-        self.conn = redis.Redis(db=15)
+        self.conn = redis.StrictRedis(db=15, decode_responses=True)
 
     def tearDown(self):
         conn = self.conn
@@ -250,6 +272,42 @@ class TestCh02(unittest.TestCase):
         LIMIT = 10000000
         print()
         print()
+
+
+    def test_login_cookies_by_list(self):
+        conn = self.conn
+        global LIMIT, QUIT
+        token = str(uuid.uuid4())
+
+        update_token_by_list(conn, token, 'username', 'itemX')
+        print()
+        print("We just logged-in/updated token:", token)
+        print("For user:", 'username')
+        print()
+
+        print("What username do we get when we look-up that token?")
+        r = check_token(conn, token)
+        print(r)
+        print()
+        self.assertTrue(r)
+
+        print("Let's drop the maximum number of cookies to 0 to clean them out")
+        print("We will start a thread to do the cleaning, while we stop it later")
+
+        LIMIT = 0
+        t = threading.Thread(target=clean_sessions_by_list, args=(conn,))
+        t.setDaemon(1)  # to make sure it dies if we ctrl+C quit
+        t.start()
+        time.sleep(1)
+        QUIT = True
+        time.sleep(2)
+        if t.isAlive():
+            raise Exception("The clean sessions thread is still alive?!?")
+
+        s = conn.hlen('login:')
+        print("The current number of sessions still available is:", s)
+        self.assertFalse(s)
+
 
     def test_login_cookies(self):
         conn = self.conn
